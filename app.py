@@ -4,8 +4,13 @@
   C:/Users/yhq18/miniconda3/envs/gpumdkit/python.exe app.py
 然后在浏览器打开 http://127.0.0.1:7860
 """
+import html
+import json
 import os
+import shutil
 import sys
+import time
+import uuid
 
 # 让子进程（tools.py 调用 scripts/hq_*.py）也继承 UTF-8 模式，避免 GBK 编码错误。
 os.environ.setdefault("PYTHONUTF8", "1")
@@ -26,6 +31,7 @@ import agent
 import tools
 
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.log")
+PROJECTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "projects.json")
 
 
 def _log_error(msg):
@@ -80,18 +86,20 @@ gradio-app, body, html { margin: 0 !important; padding: 0 !important; }
 .sidebar {
   background: #f9f9f9 !important;
   border-right: 1px solid #e5e5e5 !important;
-  padding: 20px 14px !important;
+  padding: 14px 12px !important;
   height: 100vh;
   overflow: hidden;
   display: flex !important;
   flex-direction: column !important;
+  flex-wrap: nowrap !important;
   flex: 0 0 210px !important;
   min-width: 210px !important;
   max-width: 210px !important;
   text-align: left !important;
   align-items: stretch !important;
 }
-.brand { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding: 0 4px; }
+.sidebar > .block, .sidebar > .column { flex-grow: 0 !important; flex-shrink: 0 !important; }
+.brand { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 0 4px; }
 .brand-logo {
   width: 34px; height: 34px; border-radius: 9px; flex: 0 0 auto;
   background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
@@ -102,7 +110,7 @@ gradio-app, body, html { margin: 0 !important; padding: 0 !important; }
 .brand-name { font-size: 16px; font-weight: 700; color: #1f1f1f; line-height: 1.2; }
 .brand-sub { font-size: 11.5px; color: #8e8e93; margin-top: 1px; }
 
-.new-chat-btn { margin-bottom: 16px; }
+.new-chat-btn { margin-bottom: 10px; }
 .new-chat-btn button {
   background: #ffffff !important; color: #1f1f1f !important;
   border: 1px solid #e0e0e5 !important; border-radius: 10px !important;
@@ -111,11 +119,18 @@ gradio-app, body, html { margin: 0 !important; padding: 0 !important; }
 
 .side-title {
   font-size: 12px; color: #9ca3af; font-weight: 600;
-  letter-spacing: .5px; margin: 0 4px 8px 4px;
+  letter-spacing: .5px; margin: 0 4px 6px 4px;
 }
 
-/* 智能体执行过程：豆包历史列表风格的步骤条目 */
-.proc-panel { margin-bottom: 16px; max-height: 42vh; overflow-y: auto; }
+/* 智能体执行过程：固定高度的独立区域，步骤多了在内部滚动 */
+.proc-panel {
+  margin-bottom: 10px;
+  flex-basis: 30vh !important;
+  flex-grow: 0 !important;
+  flex-shrink: 0 !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+}
 .proc-empty { color: #b0b0b5; font-size: 12px; line-height: 1.6; padding: 0 4px; }
 .proc-list { display: flex; flex-direction: column; gap: 2px; }
 .proc-step {
@@ -142,8 +157,38 @@ gradio-app, body, html { margin: 0 !important; padding: 0 !important; }
 @keyframes procIn { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 @keyframes pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
 
-/* 生成文件区（吸底） */
-.sidebar-files { margin-top: auto; padding-top: 12px; }
+/* 最近项目区：固定在智能体执行过程下方，占满剩余高度，可鼠标滚动 */
+.sidebar-files { margin-top: 2px; padding-top: 0; }
+.sidebar > .projects-panel {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  margin-bottom: 0;
+}
+.projects-list { display: flex; flex-direction: column; gap: 2px; }
+.project-item {
+  display: flex; align-items: center; gap: 4px;
+  padding: 7px 8px 7px 10px; border-radius: 8px;
+  cursor: pointer;
+}
+.project-item:hover { background: #ececf1; }
+.project-body { flex: 1 1 auto; min-width: 0; }
+.project-title {
+  font-size: 12.5px; font-weight: 600; color: #1f2937;
+  line-height: 1.35;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.project-meta { font-size: 11px; color: #9ca3af; margin-top: 2px; }
+.project-del {
+  display: none;
+  flex: 0 0 auto;
+  width: 20px; height: 20px; border: none; border-radius: 5px;
+  background: transparent; color: #9ca3af; font-size: 16px; line-height: 20px;
+  cursor: pointer; padding: 0; text-align: center;
+}
+.project-item:hover .project-del { display: block; }
+.project-del:hover { background: #e5e5ea; color: #ef4444; }
+.projects-empty { color: #b0b0b5; font-size: 12px; padding: 4px; line-height: 1.6; }
 
 /* ===== 主对话区 ===== */
 .app-row { height: 100vh !important; margin: 0 !important; padding: 0 !important; }
@@ -271,18 +316,145 @@ PLACEHOLDER = """
 """
 
 
-def list_files():
-    """列出 workspace 里 Agent 生成的文件（按修改时间倒序，供下载）。"""
+def _safe_name(name):
+    """清理文件夹名里的非法字符。"""
+    for ch in '/\\:*?"<>|':
+        name = name.replace(ch, " ")
+    return " ".join(name.split()).strip()
+
+
+def _folder_name(steps):
+    """根据本次调用的工具，概括出文件夹名。"""
+    labels = []
+    for s in steps:
+        lbl = (s.get("label") or "").strip()
+        if lbl and lbl not in labels:
+            labels.append(lbl)
+    if not labels:
+        return "生成结果"
+    name = _safe_name(" · ".join(labels[:2]))[:40].rstrip()
+    return name or "生成结果"
+
+
+def _move_into_folder(names, folder):
+    """把本次生成的文件移入 workspace/<folder>/ 子文件夹。"""
     ws = tools.WORKSPACE
-    if not os.path.isdir(ws):
-        return []
-    files = [
-        os.path.join(ws, f)
-        for f in os.listdir(ws)
-        if os.path.isfile(os.path.join(ws, f)) and not f.startswith("_")
-    ]
-    files.sort(key=os.path.getmtime, reverse=True)
-    return files
+    dst = os.path.join(ws, folder)
+    os.makedirs(dst, exist_ok=True)
+    for name in names:
+        src = os.path.join(ws, name)
+        if os.path.isfile(src):
+            try:
+                shutil.move(src, os.path.join(dst, name))
+            except Exception:
+                pass
+
+
+def _load_projects():
+    """读取最近项目列表（最新在前），并给老记录补齐 id。"""
+    try:
+        with open(PROJECTS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            changed = False
+            for p in data:
+                if isinstance(p, dict) and not p.get("id"):
+                    p["id"] = uuid.uuid4().hex[:12]
+                    changed = True
+            if changed:
+                _save_projects(data)
+            return data
+    except Exception:
+        pass
+    return []
+
+
+def _save_projects(projects):
+    """把项目列表写回 projects.json。"""
+    try:
+        with open(PROJECTS_FILE, "w", encoding="utf-8") as f:
+            json.dump(projects, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _project_title(steps, message):
+    """根据本次对话概括出一个项目标题。"""
+    if steps:
+        return _folder_name(steps)
+    s = (message or "").strip()
+    return _safe_name(s)[:20] or "对话"
+
+
+def _record_project(steps, message, new_files, history, display):
+    """记录一次对话为项目（内容概括 + 生成文件 + 完整对话），返回更新后的列表。"""
+    projects = _load_projects()
+    projects.insert(0, {
+        "id": uuid.uuid4().hex[:12],
+        "title": _project_title(steps, message),
+        "time": time.strftime("%Y-%m-%d %H:%M"),
+        "files": list(new_files),
+        "message": message,
+        "history": history,
+        "display": display,
+        "steps": steps,
+    })
+    projects = projects[:50]
+    _save_projects(projects)
+    return projects
+
+
+def _within_7days(time_str):
+    """判断项目时间是否在近 7 天内。"""
+    try:
+        t = time.mktime(time.strptime(time_str, "%Y-%m-%d %H:%M"))
+        return (time.time() - t) <= 7 * 24 * 3600
+    except Exception:
+        return False
+
+
+def _render_projects():
+    """渲染「最近项目」列表 HTML（仅显示近 7 天）。"""
+    projects = [p for p in _load_projects() if _within_7days(p.get("time", ""))]
+    if not projects:
+        return '<div class="projects-empty">近 7 天暂无项目，开始对话后会自动记录</div>'
+    parts = []
+    for p in projects:
+        pid = html.escape(str(p.get("id") or ""), quote=True)
+        title = html.escape(p.get("title", "") or "对话")
+        t = html.escape(p.get("time", "") or "")
+        n = len(p.get("files") or [])
+        meta = t + (f" · {n}个文件" if n else "")
+        parts.append(
+            '<div class="project-item" data-id="' + pid + '">'
+            '<div class="project-body">'
+            '<div class="project-title">' + title + '</div>'
+            '<div class="project-meta">' + html.escape(meta) + '</div>'
+            '</div>'
+            '<button type="button" class="project-del" data-id="' + pid + '" title="删除该项目">×</button>'
+            "</div>"
+        )
+    return '<div class="projects-list">' + "".join(parts) + "</div>"
+
+
+def load_project(pid):
+    """根据项目 id 载入该对话到界面，返回 (chatbot, history_state, display_state, 过程面板)。"""
+    pid = (pid or "").strip()
+    proj = next((p for p in _load_projects() if str(p.get("id")) == pid), None)
+    if proj is None:
+        return [], [], [], _proc_html([])
+    history = list(proj.get("history") or [])
+    display = list(proj.get("display") or [])
+    steps = list(proj.get("steps") or [])
+    return display, history, display, _proc_html(steps)
+
+
+def delete_project(pid):
+    """从「最近项目」中删除指定项目，返回更新后的列表 HTML。"""
+    pid = (pid or "").strip()
+    projects = [p for p in _load_projects() if str(p.get("id")) != pid]
+    _save_projects(projects)
+    return _render_projects()
 
 
 def _workspace_names():
@@ -344,7 +516,7 @@ def _build_result(answer, images, new_files):
         chips = " ".join(f"`{f}`" for f in new_files)
         parts.append(
             "\n\n---\n\n**📦 本次生成文件**\n\n" + chips +
-            "\n\n> 可在左侧「生成文件」区下载"
+            "\n\n> 文件已保存到工作目录，并记录在左侧「最近项目」中"
         )
     if not parts:
         parts = ["已完成。"]
@@ -359,7 +531,7 @@ def _build_result(answer, images, new_files):
 def respond(message, history_state, display_state):
     message = (message or "").strip()
     if not message:
-        yield "", display_state, history_state, display_state, list_files(), _proc_html([])
+        yield "", display_state, history_state, display_state, _render_projects(), _proc_html([])
         return
 
     user_msg = {"role": "user", "content": message}
@@ -369,7 +541,7 @@ def respond(message, history_state, display_state):
 
     # 初始画面：用户消息 + 「正在思考」占位（回答一次性输出，不再逐字打）
     display = display_state + [user_msg, {"role": "assistant", "content": "*正在思考…*"}]
-    yield "", display, history_state, display, list_files(), _proc_html(steps)
+    yield "", display, history_state, display, _render_projects(), _proc_html(steps)
 
     answer = ""
     images = []
@@ -385,7 +557,7 @@ def respond(message, history_state, display_state):
                     "summary": "",
                     "elapsed_ms": 0,
                 })
-                yield "", display, history_state, display, list_files(), _proc_html(steps)
+                yield "", display, history_state, display, _render_projects(), _proc_html(steps)
             elif ev["type"] == "tool_call":
                 s = ev["step"]
                 for st in reversed(steps):
@@ -397,7 +569,7 @@ def respond(message, history_state, display_state):
                             "elapsed_ms": s.get("elapsed_ms", 0),
                         })
                         break
-                yield "", display, history_state, display, list_files(), _proc_html(steps)
+                yield "", display, history_state, display, _render_projects(), _proc_html(steps)
             elif ev["type"] == "done":
                 answer = ev["answer"]
                 images = ev["images"]
@@ -408,17 +580,27 @@ def respond(message, history_state, display_state):
 
     final_text = answer or "（无回答）"
     new_files = sorted(_workspace_names() - before)
+    if new_files:
+        folder = _folder_name(steps)
+        _move_into_folder(new_files, folder)
+        moved = {os.path.basename(n) for n in new_files}
+        images = [
+            (os.path.join(os.path.dirname(p), folder, os.path.basename(p))
+             if os.path.basename(p) in moved else p)
+            for p in images
+        ]
     display[-1] = {"role": "assistant", "content": _build_result(final_text, images, new_files)}
 
     history_state = history_state + [
         {"role": "user", "content": message},
         {"role": "assistant", "content": final_text},
     ]
-    yield "", display, history_state, display, list_files(), _proc_html(steps)
+    _record_project(steps, message, new_files, history_state, display)
+    yield "", display, history_state, display, _render_projects(), _proc_html(steps)
 
 
 def clear_chat():
-    return [], [], [], list_files(), _proc_html([])
+    return [], [], [], _render_projects(), _proc_html([])
 
 
 with gr.Blocks(title="HQmdstem AI 智能助手") as demo:
@@ -429,9 +611,9 @@ with gr.Blocks(title="HQmdstem AI 智能助手") as demo:
             with gr.Column(elem_classes=["new-chat-btn"]):
                 new_chat = gr.Button("＋ 新对话")
             gr.HTML(PROC_TITLE_HTML)
-            proc_panel = gr.HTML(elem_classes=["proc-panel"])
-            gr.HTML('<div class="sidebar-files"><div class="side-title">生成文件</div></div>')
-            files_out = gr.File(label="", file_count="multiple", interactive=False, value=list_files())
+            proc_panel = gr.HTML(elem_classes=["proc-panel"], value=_proc_html([]))
+            gr.HTML('<div class="sidebar-files"><div class="side-title">最近项目</div></div>')
+            projects_out = gr.HTML(elem_classes=["projects-panel"], value=_render_projects())
 
         # ===== 主对话区 =====
         with gr.Column(scale=4, elem_classes=["main-col"]):
@@ -462,7 +644,7 @@ with gr.Blocks(title="HQmdstem AI 智能助手") as demo:
                         btn.click(
                             fn=_handler,
                             inputs=[history_state, display_state],
-                            outputs=[chatbot, history_state, display_state, files_out, proc_panel],
+                            outputs=[chatbot, history_state, display_state, projects_out, proc_panel],
                         )
 
             with gr.Row(elem_classes=["input-row"]):
@@ -474,14 +656,58 @@ with gr.Blocks(title="HQmdstem AI 智能助手") as demo:
                 )
                 send = gr.Button("发送", scale=0, variant="primary", elem_classes=["send-btn"])
 
-    outputs = [msg, chatbot, history_state, display_state, files_out, proc_panel]
+    outputs = [msg, chatbot, history_state, display_state, projects_out, proc_panel]
     inputs = [msg, history_state, display_state]
+
+    proj_click_id = gr.Textbox(visible="hidden", elem_id="proj-click-id")
+    proj_click_go = gr.Button(visible="hidden", elem_id="proj-click-go")
+    proj_del_id = gr.Textbox(visible="hidden", elem_id="proj-del-id")
+    proj_del_go = gr.Button(visible="hidden", elem_id="proj-del-go")
 
     send.click(respond, inputs, outputs)
     msg.submit(respond, inputs, outputs)
-    new_chat.click(clear_chat, None, [chatbot, history_state, display_state, files_out, proc_panel])
+    new_chat.click(clear_chat, None, [chatbot, history_state, display_state, projects_out, proc_panel])
+    proj_click_go.click(
+        load_project, proj_click_id,
+        [chatbot, history_state, display_state, proc_panel],
+    )
+    proj_del_go.click(delete_project, proj_del_id, [projects_out])
+
+    demo.load(
+        None, None, None,
+        js="""() => {
+  function setHiddenValue(sel, val) {
+    const ta = document.querySelector(sel + ' textarea') || document.querySelector(sel + ' input');
+    if (!ta) return false;
+    const proto = ta.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+    setter.call(ta, val);
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  }
+  function clickHidden(sel) {
+    const btn = document.querySelector(sel + ' button') || document.querySelector(sel);
+    if (btn) btn.click();
+  }
+  document.addEventListener('click', (e) => {
+    const del = e.target && e.target.closest ? e.target.closest('.project-del') : null;
+    if (del) {
+      const pid = del.getAttribute('data-id');
+      if (!pid) return;
+      if (!window.confirm('确定删除该项目？')) return;
+      if (setHiddenValue('#proj-del-id', pid)) clickHidden('#proj-del-go');
+      return;
+    }
+    const item = e.target && e.target.closest ? e.target.closest('.project-item') : null;
+    if (!item) return;
+    const pid = item.getAttribute('data-id');
+    if (!pid) return;
+    if (setHiddenValue('#proj-click-id', pid)) clickHidden('#proj-click-go');
+  });
+}""",
+    )
 
 
 if __name__ == "__main__":
     demo.queue(default_concurrency_limit=4)
-    demo.launch(theme=theme, css=CSS, inbrowser=True)
+    demo.launch(theme=theme, css=CSS, inbrowser=True, allowed_paths=[tools.WORKSPACE])

@@ -12,8 +12,9 @@ import subprocess
 import sys
 
 AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
-# HQmdstem 仓库根目录（包含 scripts/ 与 examples/）
-HQ_HOME = r"D:\Desktop\HQmdstem\github"
+# HQmdstem 仓库根目录（包含 scripts/ 与 examples/），已自包含在 agent 目录内；
+# 可用环境变量 HQMDSTEMKIT_HOME 覆盖（底层脚本 hq_common.hq_home 读同一个变量）。
+HQ_HOME = os.environ.get("HQMDSTEMKIT_HOME") or AGENT_DIR
 WORKSPACE = os.path.join(AGENT_DIR, "workspace")
 os.makedirs(WORKSPACE, exist_ok=True)
 
@@ -82,6 +83,30 @@ def convert_xyz_to_cfg(xyz_file, cfg_file=None):
     if cfg_file:
         args += [cfg_file]
     return _script("hq_qstem.py", *args)
+
+
+def convert_cfg_to_xyz(cfg_file, xyz_file=None):
+    """把 QSTEM cfg 结构转回 xyz（含 Lattice 头）。"""
+    args = ["cfg2xyz", cfg_file]
+    if xyz_file:
+        args += [xyz_file]
+    return _script("hq_qstem.py", *args)
+
+
+def shift_energy(xyz_file, out_file, ref=None):
+    """NEP 训练集能量平移：header 能量减去各元素参考能×原子数。"""
+    args = ["shift", xyz_file, out_file]
+    if ref:
+        args += ["--ref", ref]
+    return _script("hq_nep.py", *args)
+
+
+def remove_frames(src_xyz, rm_xyz, out_file=None):
+    """从训练集中筛掉坏帧/重复帧（按结构指纹匹配）。"""
+    args = ["remove", src_xyz, rm_xyz]
+    if out_file:
+        args += ["-o", out_file]
+    return _script("hq_nep.py", *args)
 
 
 _PHASE_MAP = {
@@ -169,12 +194,40 @@ def plot_born_stability(out=None):
     return _script("hq_elastic.py", *args)
 
 
+def prepare_nep_finetune(directory="nep_finetune", type_line="2 Cu Zn"):
+    """生成 NEP 微调输入文件（train.xyz / nep.txt / nep.in / NEP89 restart），不跑训练。"""
+    return _script("hq_nep.py", "finetune", directory, "--type", type_line)
+
+
+def prepare_cp2k_input(src_dir=".", func="PBE-D3", out=None):
+    """生成 CP2K 单点能输入文件（input.inp + pos.xyz + sbatch 提交脚本）。"""
+    args = ["pretreat", src_dir, "--func", func]
+    if out:
+        args += ["--out", out]
+    return _script("hq_cp2k.py", *args)
+
+
+def prepare_abacus_input(src_dir=".", pp_dir=None, orb_dir=None, func="PBE-D3", out=None):
+    """生成 ABACUS 单点能输入文件（STRU + INPUT + sbatch），需用户提供 --pp/--orb 目录。"""
+    args = ["pretreat", src_dir, "--func", func]
+    if pp_dir:
+        args += ["--pp", pp_dir]
+    if orb_dir:
+        args += ["--orb", orb_dir]
+    if out:
+        args += ["--out", out]
+    return _script("hq_abacus.py", *args)
+
+
 # ---------------- 调度表 ----------------
 
 TOOL_DISPATCH = {
     "generate_ordered_structure": generate_ordered_structure,
     "generate_disordered_structure": generate_disordered_structure,
     "convert_xyz_to_cfg": convert_xyz_to_cfg,
+    "convert_cfg_to_xyz": convert_cfg_to_xyz,
+    "shift_energy": shift_energy,
+    "remove_frames": remove_frames,
     "plot_cu_zn_phase_data": plot_cu_zn_phase_data,
     "plot_rdf": plot_rdf,
     "plot_rdf_4x1": plot_rdf_4x1,
@@ -184,6 +237,9 @@ TOOL_DISPATCH = {
     "prepare_gpumd_input": prepare_gpumd_input,
     "analyze_elastic_born": analyze_elastic_born,
     "plot_born_stability": plot_born_stability,
+    "prepare_nep_finetune": prepare_nep_finetune,
+    "prepare_cp2k_input": prepare_cp2k_input,
+    "prepare_abacus_input": prepare_abacus_input,
 }
 
 
@@ -234,6 +290,36 @@ TOOL_SCHEMAS = [
             "cfg_file": {"type": "string", "description": "输出 cfg 文件名，缺省同名前缀 .cfg"},
         },
         ["xyz_file"],
+    ),
+    _fn(
+        "convert_cfg_to_xyz",
+        "把 QSTEM 的 cfg 结构文件转换回 xyz 格式（含晶格 Lattice 头，用于可视化或后续分析）。",
+        {
+            "cfg_file": {"type": "string", "description": "输入 cfg 文件名"},
+            "xyz_file": {"type": "string", "description": "输出 xyz 文件名，缺省同名前缀 .xyz"},
+        },
+        ["cfg_file"],
+    ),
+    _fn(
+        "shift_energy",
+        "对 NEP 训练集的 xyz 做能量平移：把每帧 header 的能量减去各元素参考能×原子数，得到相对能量（形成能），便于 NEP 训练收敛。",
+        {
+            "xyz_file": {"type": "string", "description": "输入 xyz（如 train.xyz）"},
+            "out_file": {"type": "string", "description": "输出 xyz 文件名"},
+            "ref": {"type": "string",
+                    "description": "逗号分隔的各元素参考能，顺序 Cu,Zn,C,Ti,Al,V，缺省用内置值"},
+        },
+        ["xyz_file", "out_file"],
+    ),
+    _fn(
+        "remove_frames",
+        "从训练集 xyz 中删除与指定 xyz 结构重复（或坏点）的帧，输出筛选后的训练集。",
+        {
+            "src_xyz": {"type": "string", "description": "待筛选的源 xyz 训练集"},
+            "rm_xyz": {"type": "string", "description": "要删除的帧所在 xyz（按结构指纹匹配）"},
+            "out_file": {"type": "string", "description": "输出 xyz 文件名，缺省 selectsum.xyz"},
+        },
+        ["src_xyz", "rm_xyz"],
     ),
     _fn(
         "plot_cu_zn_phase_data",
@@ -318,5 +404,38 @@ TOOL_SCHEMAS = [
             "out": {"type": "string", "description": "输出图片文件名，缺省 Born_Stability_3x2.png"},
         },
         [],
+    ),
+    _fn(
+        "prepare_nep_finetune",
+        "生成 NEP 势函数微调（fine-tune）所需的全部输入文件：train.xyz、nep.txt、nep.in（含 fine_tune 行与元素类型）、NEP89 restart 文件。只生成输入，不执行训练；用户把输出目录拷到集群用 gnep 运行。",
+        {
+            "directory": {"type": "string", "description": "输出目录名，缺省 nep_finetune"},
+            "type_line": {"type": "string", "description": "元素类型行，缺省 \"2 Cu Zn\""},
+        },
+        [],
+    ),
+    _fn(
+        "prepare_cp2k_input",
+        "生成 CP2K 单点能（ENERGY_FORCE）计算的输入文件：每个结构生成 input.inp + pos.xyz，外加 GPU/CPU 的 sbatch 提交脚本。输入目录里放 POSCAR_*.vasp 或带晶格的 *.xyz 结构。只生成输入，不执行计算。",
+        {
+            "src_dir": {"type": "string", "description": "结构所在目录（含 POSCAR_*.vasp 或 *.xyz）"},
+            "func": {"type": "string", "enum": ["LDA", "PBE", "PBE-D3"],
+                     "description": "交换关联泛函，缺省 PBE-D3"},
+            "out": {"type": "string", "description": "输出目录，缺省当前工作目录"},
+        },
+        ["src_dir"],
+    ),
+    _fn(
+        "prepare_abacus_input",
+        "生成 ABACUS 单点能（scf）计算的输入文件：每个结构生成 STRU + INPUT，外加 sbatch 提交脚本。需要用户提供赝势目录（pp_dir）与轨道目录（orb_dir），这两个是第三方数据、未随包分发。只生成输入，不执行计算。",
+        {
+            "src_dir": {"type": "string", "description": "结构所在目录（含 POSCAR_*.vasp / POSCAR / *.xyz / *.data）"},
+            "pp_dir": {"type": "string", "description": "赝势目录路径（如 apns-pseudopotentials-v1）"},
+            "orb_dir": {"type": "string", "description": "轨道目录路径（如 apns-orbitals-precision-v1）"},
+            "func": {"type": "string", "enum": ["LDA", "PBE", "PBE-D3"],
+                     "description": "交换关联泛函，缺省 PBE-D3"},
+            "out": {"type": "string", "description": "输出目录，缺省当前工作目录"},
+        },
+        ["src_dir", "pp_dir", "orb_dir"],
     ),
 ]

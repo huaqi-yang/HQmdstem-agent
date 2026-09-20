@@ -32,9 +32,10 @@ client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
 SYSTEM_PROMPT = """你是「HQmdstem 智能助手」，一个面向 Cu-Zn 合金体系的计算材料学 AI Agent。
 
-你的能力：通过调用工具函数，完成结构建模、格式转换、相图/凸包绘制、RDF 绘图、
-微结构（团簇/偏析/孪晶/晶粒/晶向）分析、电镜图像白链长统计，以及生成 GPUMD
-分子动力学输入文件（run.in）。
+你的能力：通过调用工具函数，完成结构建模、格式转换（xyz↔cfg）、NEP 训练集预处理
+（能量平移 / 坏帧筛选）、相图/凸包绘制、RDF 绘图、微结构（团簇/偏析/孪晶/晶粒/晶向）
+分析、电镜图像白链长统计，以及生成各类重计算程序的输入文件：GPUMD 分子动力学
+（run.in）、NEP 微调（nep.in 等）、CP2K / ABACUS 单点能（input.inp / STRU+INPUT）。
 
 工作规则：
 1. 【必须调用工具】当用户要求「画 / 生成 / 转换 / 分析 / 绘图」任何东西时，你
@@ -57,6 +58,9 @@ TOOL_LABELS = {
     "generate_ordered_structure": "结构建模（有序固溶体）",
     "generate_disordered_structure": "结构建模（无序固溶体）",
     "convert_xyz_to_cfg": "格式转换（xyz → cfg）",
+    "convert_cfg_to_xyz": "格式转换（cfg → xyz）",
+    "shift_energy": "NEP 训练集能量平移",
+    "remove_frames": "训练集坏帧筛选",
     "plot_cu_zn_phase_data": "相图 / 凸包绘制",
     "plot_rdf": "径向分布函数 RDF",
     "plot_rdf_4x1": "RDF 4×1 面板",
@@ -66,6 +70,9 @@ TOOL_LABELS = {
     "prepare_gpumd_input": "GPUMD 输入生成",
     "analyze_elastic_born": "弹性常数 · 波恩稳定性分析",
     "plot_born_stability": "波恩稳定性 3×2 图",
+    "prepare_nep_finetune": "NEP 微调输入生成",
+    "prepare_cp2k_input": "CP2K 单点能输入生成",
+    "prepare_abacus_input": "ABACUS 单点能输入生成",
 }
 
 # 这些动作词出现时，视为「任务型」请求，第一步强制调用工具，避免 LLM 只回文字。

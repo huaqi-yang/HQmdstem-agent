@@ -3,3 +3,5 @@ workspace/
 __pycache__/
 *.pyc
 *.log
+projects.json
+*.bak
