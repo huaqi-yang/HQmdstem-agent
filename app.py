@@ -1,7 +1,7 @@
 """HQmdstem AI 智能助手 —— Gradio 网页界面（全屏界面布局）。
 
 启动：
-  C:/Users/yhq18/miniconda3/envs/gpumdkit/python.exe app.py
+  python app.py
 然后在浏览器打开 http://127.0.0.1:7860
 """
 import html
