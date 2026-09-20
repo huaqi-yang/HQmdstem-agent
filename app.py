@@ -1,4 +1,4 @@
-"""HQmdstem AI 智能助手 —— Gradio 网页界面（豆包风格布局）。
+"""HQmdstem AI 智能助手 —— Gradio 网页界面（全屏界面布局）。
 
 启动：
   C:/Users/yhq18/miniconda3/envs/gpumdkit/python.exe app.py
@@ -82,7 +82,7 @@ gradio-app, body, html { margin: 0 !important; padding: 0 !important; }
   padding: 0 !important;
 }
 
-/* ===== 左侧边栏（豆包风格） ===== */
+/* ===== 左侧边栏 ===== */
 .sidebar {
   background: #f9f9f9 !important;
   border-right: 1px solid #e5e5e5 !important;
@@ -208,7 +208,7 @@ gradio-app, body, html { margin: 0 !important; padding: 0 !important; }
 .examples-row { margin-top: auto !important; }
 .examples-row, .input-row { flex: 0 0 auto !important; }
 
-/* 输入区：豆包式大圆角输入框 */
+/* 输入区：大圆角输入框 */
 .input-row { padding: 8px 24px 10px 24px; gap: 10px; align-items: center; }
 .input-box textarea, .input-box input {
   border-radius: 24px !important;
@@ -248,7 +248,7 @@ gradio-app, body, html { margin: 0 !important; padding: 0 !important; }
 }
 .example-chips button:hover { background: #e8e8ec !important; }
 
-/* ===== 豆包式气泡 ===== */
+/* ===== 聊天气泡 ===== */
 .chatbot .message-row { background: transparent !important; }
 .chatbot .user-row, .chatbot .bot-row { background: transparent !important; }
 
@@ -469,7 +469,7 @@ def _workspace_names():
 
 
 def _proc_html(steps):
-    """把工具步骤列表渲染成左侧「智能体执行过程」面板 HTML（豆包历史列表风格）。"""
+    """把工具步骤列表渲染成左侧「智能体执行过程」面板 HTML（历史列表风格）。"""
     if not steps:
         return '<div class="proc-empty">对话开始后，智能体的每一步操作会显示在这里</div>'
     items = []
