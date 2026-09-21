@@ -8,6 +8,7 @@ import html
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 import uuid
@@ -59,6 +60,21 @@ EXAMPLES = [
     "画 RDF 4x1 面板",
     "画 Cu-Zn 合金的波恩稳定性图",
 ]
+
+# 「选择工作空间」按钮 + 弹出菜单（模仿 WorkBuddy 输入框下方的文件夹按钮）
+WS_SELECT_HTML = """
+<div class="ws-select-wrap">
+  <button type="button" class="ws-select-btn" id="ws-select-btn">
+    <span class="ws-select-icon">📁</span>
+    <span class="ws-select-label" id="ws-select-label">选择工作空间</span>
+    <span class="ws-select-caret">▾</span>
+  </button>
+  <div class="ws-select-menu" id="ws-select-menu" style="display:none;">
+    <button type="button" class="ws-select-item" data-action="local"><span class="ws-item-icon">📂</span>打开本地工作空间</button>
+    <button type="button" class="ws-select-item" data-action="default"><span class="ws-item-icon">🏠</span>使用默认工作空间</button>
+  </div>
+</div>
+"""
 
 CSS = """
 footer { display: none !important; }
@@ -200,13 +216,13 @@ gradio-app, body, html { margin: 0 !important; padding: 0 !important; }
   overflow: hidden !important;
   gap: 0 !important;
 }
-.main-col > * { flex-shrink: 0 !important; }
 .chat-wrap {
   padding: 8px 24px 0 24px;
-  flex: 0 0 auto !important;
+  flex: 1 1 0 !important;
+  min-height: 0 !important;
 }
 .examples-row { margin-top: auto !important; }
-.examples-row, .input-row { flex: 0 0 auto !important; }
+.examples-row, .input-row, .ws-row { flex: 0 0 auto !important; }
 
 /* 输入区：大圆角输入框 */
 .input-row { padding: 8px 24px 10px 24px; gap: 10px; align-items: center; }
@@ -234,6 +250,48 @@ gradio-app, body, html { margin: 0 !important; padding: 0 !important; }
   box-shadow: 0 2px 8px rgba(37, 99, 235, .35) !important;
 }
 .send-btn button:hover { background: #1d4ed8 !important; }
+
+/* ===== 工作空间选择栏（输入框下方） ===== */
+.ws-row { padding: 0 24px 8px 24px; gap: 8px; align-items: center; flex: 0 0 auto !important; }
+.ws-label { font-size: 12px; color: #8e8e93; font-weight: 600; flex: 0 0 auto; white-space: nowrap; }
+.ws-bar-wrap { flex: 0 0 auto !important; }
+.ws-bar { display: inline-flex; align-items: center; gap: 8px; line-height: 1; }
+.ws-path-box {
+  display: inline-flex; align-items: center;
+  height: 32px; padding: 0 12px; max-width: 340px;
+  border-radius: 10px; background: #f4f4f5;
+  border: 1px solid transparent;
+  font-size: 12.5px; font-family: Consolas, "Courier New", monospace;
+  color: #3f3f46; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ws-status { font-size: 11px; color: #8e8e93; line-height: 1.3; min-height: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 「选择工作空间」按钮 + 弹出菜单（模仿 WorkBuddy） */
+.ws-select-wrap { position: relative; }
+.ws-select-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 12px;
+  border: 1px solid #e0e0e5; border-radius: 8px;
+  background: #ffffff; font-size: 12.5px; color: #1f1f1f;
+  cursor: pointer; font-weight: 500; white-space: nowrap;
+}
+.ws-select-btn:hover { background: #f4f4f5; }
+.ws-select-icon { font-size: 13px; line-height: 1; }
+.ws-select-label { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-select-caret { color: #9ca3af; font-size: 10px; }
+.ws-select-menu {
+  position: absolute; bottom: 40px; left: 0; z-index: 60;
+  min-width: 200px; background: #ffffff;
+  border: 1px solid #e5e5e5; border-radius: 10px;
+  box-shadow: 0 -8px 24px rgba(0,0,0,.10); padding: 4px;
+}
+.ws-select-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 8px 10px; border: none; background: transparent;
+  font-size: 13px; color: #1f2937; border-radius: 6px; cursor: pointer;
+  white-space: nowrap;
+}
+.ws-select-item:hover { background: #f4f4f5; }
+.ws-item-icon { font-size: 13px; line-height: 1; flex: 0 0 auto; }
 
 /* 快速示例 chips（单行横向滚动，避免换行把输入框挤出屏幕） */
 .examples-row { padding: 0 24px 10px 24px; }
@@ -338,7 +396,7 @@ def _folder_name(steps):
 
 def _move_into_folder(names, folder):
     """把本次生成的文件移入 workspace/<folder>/ 子文件夹。"""
-    ws = tools.WORKSPACE
+    ws = tools.get_workspace()
     dst = os.path.join(ws, folder)
     os.makedirs(dst, exist_ok=True)
     for name in names:
@@ -459,13 +517,108 @@ def delete_project(pid):
 
 def _workspace_names():
     """返回 workspace 里当前的文件名集合（用于 diff 出「本次生成」的文件）。"""
-    ws = tools.WORKSPACE
+    ws = tools.get_workspace()
     if not os.path.isdir(ws):
         return set()
     return {
         f for f in os.listdir(ws)
         if os.path.isfile(os.path.join(ws, f)) and not f.startswith("_")
     }
+
+
+def _allowed_paths():
+    """允许 Gradio 访问的路径：当前/默认工作空间 + 本机所有盘符根，
+    这样用户把工作空间切到任意目录后，生成的图片仍能正常显示。"""
+    paths = {tools.get_workspace(), tools.DEFAULT_WORKSPACE, os.path.expanduser("~")}
+    for d in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+        root = d + ":/"
+        if os.path.isdir(root):
+            paths.add(root)
+    return sorted(p for p in paths if p)
+
+
+def apply_workspace(path):
+    """切换工作空间到用户输入的路径，返回 (规范化路径, 状态提示 HTML)。"""
+    path = (path or "").strip()
+    if not path:
+        return tools.get_workspace(), '<span style="color:#dc2626;">路径为空，未切换</span>'
+    try:
+        new = tools.set_workspace(path)
+    except Exception as e:
+        return tools.get_workspace(), f'<span style="color:#dc2626;">切换失败：{html.escape(str(e))}</span>'
+    return new, f'<span style="color:#16a34a;">已切换到：{html.escape(new)}</span>'
+
+
+def reset_workspace_ui():
+    """恢复默认工作空间。"""
+    new = tools.reset_workspace()
+    return new, f'<span style="color:#16a34a;">已恢复默认：{html.escape(new)}</span>'
+
+
+def _pick_folder():
+    """弹出系统「选择文件夹」对话框，返回所选路径；取消返回空串。"""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        root.update()
+        folder = filedialog.askdirectory(title="选择工作空间文件夹", parent=root)
+        root.destroy()
+        return (folder or "").strip()
+    except Exception:
+        return _pick_folder_powershell()
+
+
+def _pick_folder_powershell():
+    """无图形界面环境下的回退方案（较慢）。"""
+    ps = (
+        "Add-Type -AssemblyName System.Windows.Forms;"
+        "$f = New-Object System.Windows.Forms.FolderBrowserDialog;"
+        "$f.Description = '选择工作空间文件夹';"
+        "if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) "
+        "{ Write-Output $f.SelectedPath }"
+    )
+    try:
+        p = subprocess.run(
+            ["powershell", "-NoProfile", "-STA", "-Command", ps],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=600,
+        )
+        return (p.stdout or "").strip()
+    except Exception:
+        return ""
+
+
+def open_local_workspace(current_path):
+    """「打开本地」按钮：弹出系统文件夹选择框，选中后切换。"""
+    folder = _pick_folder()
+    if not folder:
+        return current_path, '<span style="color:#8e8e93;">已取消选择</span>'
+    return apply_workspace(folder)
+
+
+def _ws_bar_html(path):
+    """把「选择工作空间」按钮 + 菜单 + 路径框合并成一条水平栏，保证同一水平线。"""
+    return (
+        '<div class="ws-bar">'
+        + WS_SELECT_HTML
+        + f'<div class="ws-path-box" title="{html.escape(path)}">{html.escape(path)}</div>'
+        + '</div>'
+    )
+
+
+def on_ws_action(action):
+    """「选择工作空间」弹出菜单的动作分发，返回 (工作空间栏 HTML, 状态提示 HTML)。"""
+    action = (action or "").strip()
+    if action == "local":
+        path, status = open_local_workspace(tools.get_workspace())
+    elif action == "default":
+        path, status = reset_workspace_ui()
+    else:
+        path, status = tools.get_workspace(), ""
+    return _ws_bar_html(path), status
 
 
 def _proc_html(steps):
@@ -620,7 +773,7 @@ with gr.Blocks(title="HQmdstem AI 智能助手") as demo:
             with gr.Column(elem_classes=["chat-wrap"]):
                 chatbot = gr.Chatbot(
                     layout="bubble",
-                    height="calc(100vh - 200px)",
+                    height="100%",
                     show_label=False,
                     placeholder=PLACEHOLDER,
                     group_consecutive_messages=False,
@@ -656,6 +809,10 @@ with gr.Blocks(title="HQmdstem AI 智能助手") as demo:
                 )
                 send = gr.Button("发送", scale=0, variant="primary", elem_classes=["send-btn"])
 
+            with gr.Row(elem_classes=["ws-row"]):
+                ws_bar = gr.HTML(_ws_bar_html(tools.get_workspace()), scale=0, elem_classes=["ws-bar-wrap"])
+                ws_status = gr.HTML('<div class="ws-status"></div>', scale=1)
+
     outputs = [msg, chatbot, history_state, display_state, projects_out, proc_panel]
     inputs = [msg, history_state, display_state]
 
@@ -663,10 +820,13 @@ with gr.Blocks(title="HQmdstem AI 智能助手") as demo:
     proj_click_go = gr.Button(visible="hidden", elem_id="proj-click-go")
     proj_del_id = gr.Textbox(visible="hidden", elem_id="proj-del-id")
     proj_del_go = gr.Button(visible="hidden", elem_id="proj-del-go")
+    ws_action_id = gr.Textbox(visible="hidden", elem_id="ws-action-id")
+    ws_action_go = gr.Button(visible="hidden", elem_id="ws-action-go")
 
     send.click(respond, inputs, outputs)
     msg.submit(respond, inputs, outputs)
     new_chat.click(clear_chat, None, [chatbot, history_state, display_state, projects_out, proc_panel])
+    ws_action_go.click(on_ws_action, ws_action_id, [ws_bar, ws_status])
     proj_click_go.click(
         load_project, proj_click_id,
         [chatbot, history_state, display_state, proc_panel],
@@ -689,7 +849,26 @@ with gr.Blocks(title="HQmdstem AI 智能助手") as demo:
     const btn = document.querySelector(sel + ' button') || document.querySelector(sel);
     if (btn) btn.click();
   }
+  const wsBtn = document.querySelector('#ws-select-btn');
+  const wsMenu = document.querySelector('#ws-select-menu');
+  if (wsBtn && wsMenu) {
+    wsBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      wsMenu.style.display = wsMenu.style.display === 'none' ? 'block' : 'none';
+    });
+    wsMenu.querySelectorAll('.ws-select-item').forEach((it) => {
+      it.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const action = it.getAttribute('data-action') || '';
+        wsMenu.style.display = 'none';
+        if (setHiddenValue('#ws-action-id', action)) clickHidden('#ws-action-go');
+      });
+    });
+  }
   document.addEventListener('click', (e) => {
+    if (wsMenu && e.target && e.target.closest && !e.target.closest('.ws-select-wrap')) {
+      wsMenu.style.display = 'none';
+    }
     const del = e.target && e.target.closest ? e.target.closest('.project-del') : null;
     if (del) {
       const pid = del.getAttribute('data-id');
@@ -710,4 +889,4 @@ with gr.Blocks(title="HQmdstem AI 智能助手") as demo:
 
 if __name__ == "__main__":
     demo.queue(default_concurrency_limit=4)
-    demo.launch(theme=theme, css=CSS, inbrowser=True, allowed_paths=[tools.WORKSPACE])
+    demo.launch(theme=theme, css=CSS, inbrowser=True, allowed_paths=_allowed_paths())

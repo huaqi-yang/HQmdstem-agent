@@ -15,8 +15,35 @@ AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
 # HQmdstem 仓库根目录（包含 scripts/ 与 examples/），已自包含在 agent 目录内；
 # 可用环境变量 HQMDSTEMKIT_HOME 覆盖（底层脚本 hq_common.hq_home 读同一个变量）。
 HQ_HOME = os.environ.get("HQMDSTEMKIT_HOME") or AGENT_DIR
-WORKSPACE = os.path.join(AGENT_DIR, "workspace")
-os.makedirs(WORKSPACE, exist_ok=True)
+DEFAULT_WORKSPACE = os.path.join(AGENT_DIR, "workspace")
+os.makedirs(DEFAULT_WORKSPACE, exist_ok=True)
+
+# 当前工作空间：所有工具在此目录下读写文件。默认是 agent/workspace，
+# 用户可在界面里切换到任意目录，把数据放进去、生成的产物也存进去。
+_workspace = DEFAULT_WORKSPACE
+
+
+def get_workspace():
+    """返回当前工作空间目录（绝对路径）。"""
+    return _workspace
+
+
+def set_workspace(path):
+    """切换工作空间到指定目录；目录不存在则自动创建，返回规范化后的绝对路径。"""
+    global _workspace
+    path = str(path or "").strip().strip('"').strip("'")
+    if not path:
+        path = DEFAULT_WORKSPACE
+    path = os.path.abspath(os.path.expanduser(path))
+    os.makedirs(path, exist_ok=True)
+    _workspace = path
+    return path
+
+
+def reset_workspace():
+    """切回默认工作空间。"""
+    return set_workspace(DEFAULT_WORKSPACE)
+
 
 TIMEOUT = 300
 
@@ -31,7 +58,7 @@ def _script(script, *args):
     env.setdefault("PYTHONIOENCODING", "utf-8")
     try:
         p = subprocess.run(
-            cmd, cwd=WORKSPACE, capture_output=True, text=True,
+            cmd, cwd=get_workspace(), capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=TIMEOUT, env=env,
         )
     except subprocess.TimeoutExpired:
@@ -48,7 +75,7 @@ def _find_images(text):
     seen = []
     for tok in re.findall(r"\S+\.(?:png|jpg|jpeg)", text, re.IGNORECASE):
         tok = tok.rstrip(".,;")
-        p = tok if os.path.isabs(tok) else os.path.join(WORKSPACE, tok)
+        p = tok if os.path.isabs(tok) else os.path.join(get_workspace(), tok)
         p = os.path.normpath(p)
         if os.path.isfile(p) and p not in seen:
             seen.append(p)
@@ -135,7 +162,7 @@ def plot_rdf(rdf_file, out=None):
 def plot_rdf_4x1():
     """绘制 4x1 面板 RDF（50/100/200/250K）。"""
     base = os.path.join(HQ_HOME, "examples", "rdf_data")
-    return _script("hq_rdf.py", "4x1", "--base", base, "--out", WORKSPACE, "--formats", "png")
+    return _script("hq_rdf.py", "4x1", "--base", base, "--out", get_workspace(), "--formats", "png")
 
 
 _MICRO_MAP = {
@@ -169,7 +196,7 @@ def analyze_orientation(xyz_file, out=None):
 
 def analyze_tem_image(image_file):
     """电镜图像白色链长统计。"""
-    return _script("hq_micro.py", "chain", image_file, "--output-dir", WORKSPACE)
+    return _script("hq_micro.py", "chain", image_file, "--output-dir", get_workspace())
 
 
 def prepare_gpumd_input(directory="gpumd_demo", temperature=300, steps=1100000):

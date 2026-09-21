@@ -105,7 +105,11 @@ def chat_events(user_text, history):
 
     step 字段：tool / label / args / status / summary / images / elapsed_ms
     """
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    system = SYSTEM_PROMPT + (
+        f"\n\n【当前工作空间】{tools.get_workspace()}\n"
+        "所有生成的文件和读取的输入文件都在这个目录下；用户问“文件在哪 / 存到哪”时，直接给出这个路径。"
+    )
+    messages = [{"role": "system", "content": system}]
     for h in history or []:
         c = h.get("content")
         if isinstance(c, str) and c.strip():
