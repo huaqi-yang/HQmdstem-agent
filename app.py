@@ -833,6 +833,7 @@ with gr.Blocks(title="HQmdstem AI 智能助手") as demo:
     )
     proj_del_go.click(delete_project, proj_del_id, [projects_out])
 
+    demo.load(_render_projects, None, [projects_out])
     demo.load(
         None, None, None,
         js="""() => {
